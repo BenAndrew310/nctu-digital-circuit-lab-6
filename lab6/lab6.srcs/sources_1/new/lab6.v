@@ -30,16 +30,19 @@ module lab6(
   output uart_tx
 );
 
-localparam [1:0] S_MAIN_INIT = 0, S_MAIN_PROMPT = 1,
-                 S_MAIN_READ_NUM = 2, S_MAIN_REPLY = 3;
+localparam [2:0] S_MAIN_INIT = 0, S_MAIN_PROMPT = 1,
+                 S_MAIN_READ_NUM = 2, S_MAIN_REPLY = 5,
+                 S_SECOND_PROMPT = 3, S_SECOND_READ_NUM = 4;
 localparam [1:0] S_UART_IDLE = 0, S_UART_WAIT = 1,
                  S_UART_SEND = 2, S_UART_INCR = 3;
 localparam INIT_DELAY = 100_000; // 1 msec @ 100 MHz
 localparam PROMPT_STR = 0;  // starting index of the prompt message
-localparam PROMPT_LEN = 27; // length of the prompt message
-localparam REPLY_STR  = 27; // starting index of the hello message
-localparam REPLY_LEN  = 38; // length of the hello message
-localparam MEM_SIZE   = PROMPT_LEN+REPLY_LEN;
+localparam PROMPT_LEN = 35; //27; // length of the prompt message
+localparam PROMPT2_STR= 35;
+localparam PROMPT2_LEN= 36;
+localparam REPLY_STR  = 71; //27; // starting index of the hello message
+localparam REPLY_LEN  = 37; //38; // length of the hello message
+localparam MEM_SIZE   = PROMPT_LEN+PROMPT2_LEN+REPLY_LEN;
 
 // declare system variables
 wire enter_pressed;
@@ -49,10 +52,18 @@ reg [1:0] P, P_next;
 reg [1:0] Q, Q_next;
 reg [$clog2(INIT_DELAY):0] init_counter;
 reg [7:0] data[0:MEM_SIZE-1];
-reg  [0:PROMPT_LEN*8-1] msg1 = { "\015\012Enter a decimal number: ", 8'h00 };
-reg  [0:REPLY_LEN*8-1]  msg2 = { "\015\012The number you typed was: 0x0000.\015\012", 8'h00 };
+// reg  [0:PROMPT_LEN*8-1] msg1 = { "\015\012Enter a decimal number: ", 8'h00 };
+reg  [0:PROMPT_LEN*8-1] msg1 = { "\015\012Enter the first decimal number: ", 8'h00 };
+// reg  [0:REPLY_LEN*8-1]  msg2 = { "\015\012The number you typed was: 0x0000.\015\012", 8'h00 };
+reg  [0:PROMPT2_LEN*8-1]  msg2 = { "\015\012Enter the second decimal number: ", 8'h00 };
+reg  [0:REPLY_LEN*8-1] msg3 = {"\015\012The integer quotient is: 0x0000.\015\012",8'h00};
 reg  [15:0] num_reg;  // The key-in number register
 reg  [2:0]  key_cnt;  // The key strokes counter
+reg  [15:0] num1 = 16'b0;
+reg  [15:0] num2 = 16'b0;
+reg  [15:0] Quotient = 16'b0;
+reg  [15:0] Rest = 16'b0;
+reg result_ready;
 
 // declare UART signals
 wire transmit;
@@ -86,13 +97,16 @@ uart uart(
 // but we are using Verilog 2001 :(
 //
 integer idx;
+integer didx = 15;
+
 
 always @(posedge clk) begin
   if (~reset_n) begin
     for (idx = 0; idx < PROMPT_LEN; idx = idx + 1) data[idx] = msg1[idx*8 +: 8];
-    for (idx = 0; idx < REPLY_LEN; idx = idx + 1) data[idx+PROMPT_LEN] = msg2[idx*8 +: 8];
+    for (idx = 0; idx < PROMPT2_LEN; idx = idx + 1) data[idx+PROMPT_LEN] = msg2[idx*8 +: 8];
+    for (idx = 0; idx < REPLY_LEN; idx = idx + 1) data[idx+PROMPT_LEN+PROMPT2_LEN] = msg3[idx*8 +: 8];
   end
-  else if (P == S_MAIN_REPLY) begin
+  else if (P == S_MAIN_REPLY && result_ready) begin
     data[REPLY_STR+30] <= ((num_reg[15:12] > 9)? "7" : "0") + num_reg[15:12];
     data[REPLY_STR+31] <= ((num_reg[11: 8] > 9)? "7" : "0") + num_reg[11: 8];
     data[REPLY_STR+32] <= ((num_reg[ 7: 4] > 9)? "7" : "0") + num_reg[ 7: 4];
@@ -121,8 +135,14 @@ always @(*) begin // FSM next-state logic
       if (print_done) P_next = S_MAIN_READ_NUM;
       else P_next = S_MAIN_PROMPT;
     S_MAIN_READ_NUM: // wait for <Enter> key.
-      if (enter_pressed) P_next = S_MAIN_REPLY;
+      if (enter_pressed) P_next = S_SECOND_PROMPT; //S_MAIN_REPLY;
       else P_next = S_MAIN_READ_NUM;
+    S_SECOND_PROMPT:
+      if (print_done) P_next = S_SECOND_READ_NUM;
+      else P_next = S_SECOND_PROMPT;
+    S_SECOND_READ_NUM:
+      if (enter_pressed) P_next = S_MAIN_REPLY;
+      else P_next = S_SECOND_READ_NUM;
     S_MAIN_REPLY: // Print the hello message.
       if (print_done) P_next = S_MAIN_INIT;
       else P_next = S_MAIN_REPLY;
@@ -168,7 +188,7 @@ end
 
 // FSM output logics: UART transmission control signals
 assign transmit = (Q_next == S_UART_WAIT ||
-                  (P == S_MAIN_READ_NUM && received) ||
+                  (P == S_MAIN_READ_NUM && received) || (P == S_SECOND_READ_NUM && received)
                    print_enable);
 assign is_num_key = (rx_byte > 8'h2F) && (rx_byte < 8'h3A) && (key_cnt < 5);
 assign echo_key = (is_num_key || rx_byte == 8'h0D)? rx_byte : 0;
@@ -178,7 +198,8 @@ assign tx_byte  = ((P == S_MAIN_READ_NUM) && received)? echo_key : data[send_cou
 always @(posedge clk) begin
   case (P_next)
     S_MAIN_INIT: send_counter <= PROMPT_STR;
-    S_MAIN_READ_NUM: send_counter <= REPLY_STR;
+    S_MAIN_READ_NUM: send_counter <= PROMPT2_STR; //REPLY_STR;
+    S_SECOND_READ_NUM: send_counter <= REPLY_STR;
     default: send_counter <= send_counter + (Q_next == S_UART_INCR);
   endcase
 end
@@ -189,14 +210,51 @@ end
 // UART input logic
 // Decimal number input will be saved in num1 or num2.
 always @(posedge clk) begin
-  if (~reset_n || (P == S_MAIN_INIT || P == S_MAIN_PROMPT)) key_cnt <= 0;
+  if (~reset_n || (P == S_MAIN_INIT || P == S_MAIN_PROMPT || P == S_SECOND_PROMPT)) key_cnt <= 0;
   else if (received && is_num_key) key_cnt <= key_cnt + 1;
 end
 
 always @(posedge clk)begin
-  if (~reset_n) num_reg <= 0;
-  else if (P == S_MAIN_INIT || P == S_MAIN_PROMPT) num_reg <= 0;
-  else if (received && is_num_key) num_reg <= (num_reg * 10) + (rx_byte - 48);
+  if (~reset_n) begin
+    // num_reg <= 0;
+    num1 <= 0;
+    num2 <= 0;
+    didx <= 15;
+    Quotient <= 0;
+    Rest <= 0;
+    result_ready = 0;
+  end
+  else if (P == S_MAIN_INIT || P == S_MAIN_PROMPT || P == S_SECOND_PROMPT) begin
+    // num_reg <= 0;
+    num1 <= 0;
+    num2 <= 0;
+    didx <= 15;
+    Quotient <= 0;
+    Rest <= 0;
+    result_ready = 0;
+  end
+  else if (received && is_num_key && P == S_MAIN_READ_NUM) begin
+    // num_reg <= (num_reg * 10) + (rx_byte - 48);
+    num1 <= num1*10 + (rx_byte-48);
+  end
+  else if (received && is_num_key && P == S_SECOND_READ_NUM) begin
+    num2 <= num2*10 + (rx_byte-48);
+  end
+  else if (P == S_MAIN_REPLY && !result_ready) begin
+    Rest = Rest<<1;
+    R[0] = num1[didx];
+    Rest = (Rest>=num2) ? Rest-num2 : Rest;
+    Quotient[didx] = (Rest>=num2) ? 1 : Quotient[didx];
+    didx = didx - 1;
+    if (didx<0) begin
+      result_ready = 1;
+    end 
+  end
+end
+
+always @(posedge clk) begin
+  if (result_ready) num_reg <= Quotient;
+  else num_reg <= 0;
 end
 
 // The following logic stores the UART input in a temporary buffer.
