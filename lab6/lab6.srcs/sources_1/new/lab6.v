@@ -33,7 +33,7 @@ module lab6(
 localparam [2:0] S_MAIN_INIT = 0, S_MAIN_PROMPT = 1,
                  S_MAIN_READ_NUM = 2, S_MAIN_REPLY = 5,
                  S_SECOND_PROMPT = 3, S_SECOND_READ_NUM = 4,
-                 S_REPEAT = 6;
+                 S_PRINT_RESULT = 6;
 localparam [1:0] S_UART_IDLE = 0, S_UART_WAIT = 1,
                  S_UART_SEND = 2, S_UART_INCR = 3;
 localparam INIT_DELAY = 100_000; // 1 msec @ 100 MHz
@@ -49,7 +49,7 @@ localparam MEM_SIZE   = PROMPT_LEN+PROMPT2_LEN+REPLY_LEN;
 wire enter_pressed;
 wire print_enable, print_done;
 reg [$clog2(MEM_SIZE):0] send_counter;
-reg [1:0] P, P_next;
+reg [2:0] P, P_next;
 reg [1:0] Q, Q_next;
 reg [$clog2(INIT_DELAY):0] init_counter;
 reg [7:0] data[0:MEM_SIZE-1];
@@ -62,8 +62,8 @@ reg  [15:0] num_reg;  // The key-in number register
 reg  [2:0]  key_cnt;  // The key strokes counter
 reg  [15:0] num1 = 16'b0;
 reg  [15:0] num2 = 16'b0;
-reg  [15:0] Quotient = 16'b0;
-reg  [15:0] Rest = 16'b0;
+reg  [15:0] Quotient = 16'h0000;
+reg  [15:0] Rest = 16'h0000;
 reg result_ready;
 
 // declare UART signals
@@ -106,18 +106,19 @@ always @(posedge clk) begin
     for (idx = 0; idx < PROMPT_LEN; idx = idx + 1) data[idx] = msg1[idx*8 +: 8];
     for (idx = 0; idx < PROMPT2_LEN; idx = idx + 1) data[idx+PROMPT_LEN] = msg2[idx*8 +: 8];
     for (idx = 0; idx < REPLY_LEN; idx = idx + 1) data[idx+PROMPT_LEN+PROMPT2_LEN] = msg3[idx*8 +: 8];
-  end
+ end
 //  else if (P == S_MAIN_REPLY && result_ready) begin
-  else begin
-    data[REPLY_STR+30] <= ((num_reg[15:12] > 9)? "7" : "0") + num_reg[15:12];
-    data[REPLY_STR+31] <= ((num_reg[11: 8] > 9)? "7" : "0") + num_reg[11: 8];
-    data[REPLY_STR+32] <= ((num_reg[ 7: 4] > 9)? "7" : "0") + num_reg[ 7: 4];
-    data[REPLY_STR+33] <= ((num_reg[ 3: 0] > 9)? "7" : "0") + num_reg[ 3: 0];
+//  else if (P == S_PRINT_RESULT) begin
+else begin
+    data[REPLY_STR+29] <= ((num_reg[15:12] > 9)? "7" : "0") + num_reg[15:12];
+    data[REPLY_STR+30] <= ((num_reg[11: 8] > 9)? "7" : "0") + num_reg[11: 8];
+    data[REPLY_STR+31] <= ((num_reg[ 7: 4] > 9)? "7" : "0") + num_reg[ 7: 4];
+    data[REPLY_STR+32] <= ((num_reg[ 3: 0] > 9)? "7" : "0") + num_reg[ 3: 0];
   end
 end
 
 // Combinational I/O logics of the top-level system
-assign usr_led = usr_btn;
+assign usr_led = P;//usr_btn;
 assign enter_pressed = (rx_temp == 8'h0D); // don't use rx_byte here!
 
 // ------------------------------------------------------------------------
@@ -146,19 +147,19 @@ always @(*) begin // FSM next-state logic
       if (enter_pressed) P_next = S_MAIN_REPLY;
       else P_next = S_SECOND_READ_NUM;
     S_MAIN_REPLY: // Print the hello message.
-      if (result_ready) P_next = S_REPEAT;
+      if (result_ready) P_next = S_PRINT_RESULT;//S_REPEAT;
       else P_next = S_MAIN_REPLY;
-    S_REPEAT:
+    S_PRINT_RESULT:
       if (print_done) P_next = S_MAIN_INIT;
-      else P_next = S_REPEAT;
+      else P_next = S_PRINT_RESULT;
   endcase
 end
 
 // FSM output logics: print string control signals.
-assign print_enable = (P == S_MAIN_PROMPT) || (P == S_SECOND_PROMPT ) || (P == S_REPEAT);//(P != S_MAIN_PROMPT && P_next == S_MAIN_PROMPT) ||
-//                    (P != S_SECOND_PROMPT && P_next == S_SECOND_PROMPT) ||
-//                     (P == S_MAIN_READ_NUM && P_next == S_SECOND_PROMPT) ||
-//                      (P == S_SECOND_READ_NUM && P_next == S_MAIN_REPLY);
+assign print_enable = (P == S_MAIN_PROMPT) || (P == S_SECOND_PROMPT) || (P == S_PRINT_RESULT);//(P != S_MAIN_PROMPT && P_next == S_MAIN_PROMPT) ||
+//                      (P != S_SECOND_PROMPT && P_next == S_SECOND_PROMPT) ||
+//                      (P == S_MAIN_READ_NUM && P_next == S_SECOND_PROMPT) ||
+//                      (P == S_SECOND_READ_NUM && P_next == S_MAIN_REPLY) || (P == S_PRINT_RESULT);
 //                  (P == S_MAIN_READ_NUM && P_next == S_MAIN_REPLY);
 assign print_done = (tx_byte == 8'h0);
 
@@ -224,7 +225,6 @@ end
 
 always @(posedge clk)begin
   if (~reset_n) begin
-    // num_reg <= 0;
     num1 <= 0;
     num2 <= 0;
     didx <= 15;
@@ -233,8 +233,7 @@ always @(posedge clk)begin
     result_ready <= 0;
   end
   else begin
-      if (P == S_MAIN_INIT || P == S_MAIN_PROMPT || P == S_SECOND_PROMPT) begin
-        // num_reg <= 0;
+      if (P == S_MAIN_INIT) begin 
         num1 <= 0;
         num2 <= 0;
         didx <= 15;
@@ -249,11 +248,13 @@ always @(posedge clk)begin
       else if (received && is_num_key && P == S_SECOND_READ_NUM) begin
         num2 <= (num2*10) + (rx_byte-48);
       end
-      else if (P == S_MAIN_REPLY && !result_ready) begin
+      else if (P == S_MAIN_REPLY) begin
         Rest = Rest<<1;
         Rest[0] = num1[didx];
-        Rest = (Rest>=num2) ? Rest-num2 : Rest;
-        Quotient[didx] = (Rest>=num2) ? 1 : Quotient[didx];
+        if (Rest >= num2) begin
+            Rest = Rest-num2;
+            Quotient[didx] = 1;
+        end
         didx = didx - 1;
         if (didx<0) begin
           result_ready = 1;
@@ -263,8 +264,10 @@ always @(posedge clk)begin
 end
 
 always @(posedge clk) begin
-  if (result_ready) num_reg <= Quotient;
-  else num_reg <= 0;
+  if (P == S_MAIN_INIT)
+    num_reg <= 0;
+  else if (result_ready) num_reg <= Quotient;
+//  else num_reg <= 0;
 end
 
 // The following logic stores the UART input in a temporary buffer.
